@@ -11,7 +11,7 @@ from datetime import datetime
 # All of these can be overridden via environment variables (e.g. GitHub Actions
 # workflow_dispatch inputs) without touching this file. Comma-separate multiple
 # dates for DATES, e.g. "20260723,20260724".
-DATES = [d.strip() for d in os.getenv("BMS_DATES", "20260724").split(",") if d.strip()]
+DATES = [d.strip() for d in os.getenv("BMS_DATES", "20260723,20260724").split(",") if d.strip()]
 VENUE_CODE = os.getenv("BMS_VENUE_CODE", "BWCB")
 EVENT_CODE = os.getenv("BMS_EVENT_CODE", "ET00480917")
 REGION_CODE = os.getenv("BMS_REGION_CODE", "CBE")
@@ -134,9 +134,9 @@ def save_state(deltas, commit_msg="Update seat state"):
     print("[GIT] ❌ Failed to push after 3 attempts. Local memory updated with last known merge.")
     return latest_state
 
-def trigger_ntfy(message):
+def trigger_ntfy(message, attempts=3):
     print(f"\n[!] ALERTING VIA NTFY: {message}")
-    for i in range(1):
+    for i in range(attempts):
         try:
             resp = requests.post(
                 "https://ntfy.sh/odssy_stlyt",
@@ -144,9 +144,17 @@ def trigger_ntfy(message):
                 headers={"Priority": "urgent"},
                 timeout=10
             )
-            print(f"    -> Ntfy ping {i+1}/1 sent! Status: {resp.status_code}")
+            if resp.status_code == 200:
+                print(f"    -> Ntfy ping {i+1}/{attempts} sent! Status: {resp.status_code}")
+                return
+            print(f"    -> Ntfy ping {i+1}/{attempts} returned non-200 status: {resp.status_code}")
         except Exception as e:
-            print(f"    -> Ntfy ping {i+1} failed: {e}")
+            print(f"    -> Ntfy ping {i+1}/{attempts} failed: {e}")
+
+        if i < attempts - 1:
+            time.sleep(3)
+
+    print(f"    -> ❌ All {attempts} ntfy attempts failed. Alert may not have been delivered.")
 
 def toggle_warp():
     global USE_WARP
@@ -281,6 +289,37 @@ def parse_layout(str_data):
             
     return available_seats_by_row
 
+def check_booking_opened(date_counts, state):
+    """
+    Compares today's per-date session count against the last known count
+    (persisted under the reserved "_booking_watch" key). If a date goes
+    from 0 -> N sessions, bookings just opened for it, so fire an alert.
+    Returns the (possibly updated) state dict.
+    """
+    booking_watch = state.get("_booking_watch", {})
+    watch_deltas = {}
+    for date_code, count in date_counts.items():
+        if date_code in booking_watch:
+            previous_count = booking_watch[date_code]
+            if previous_count == 0 and count > 0:
+                human_date = humanize_date(date_code)
+                print(f"    -> 🎉 Booking just opened for {date_code}! ({count} {SCREEN_FILTER} sessions now listed)")
+                trigger_ntfy(
+                    f"🎬 Booking OPEN for #TheOdyssey at {VENUE_LABEL}!\n\n"
+                    f"{human_date} now has {count} {SCREEN_FILTER} session(s) listed. Go grab tickets!"
+                )
+        else:
+            print(f"    -> [BOOKING WATCH] First time observing {date_code} (count={count}). Establishing baseline, no alert.")
+        watch_deltas[date_code] = count
+
+    if watch_deltas:
+        updated_watch = dict(booking_watch)
+        updated_watch.update(watch_deltas)
+        state = save_state({"_booking_watch": updated_watch}, commit_msg="Update booking-watch state")
+        state["_booking_watch"] = updated_watch
+
+    return state
+
 def main():
     start_time = time.time()
     
@@ -302,37 +341,28 @@ def main():
     else:
         print(f"[STATE] Loaded existing state for {len(state)} sessions.")
 
-    # --- Booking-opened detection ---
-    # Compares today's per-date session count against the last known count
-    # (persisted under the reserved "_booking_watch" key). If a date goes
-    # from 0 -> N sessions, bookings just opened for it, so fire an alert.
-    booking_watch = state.get("_booking_watch", {})
-    watch_deltas = {}
-    for date_code, count in date_counts.items():
-        if date_code in booking_watch:
-            previous_count = booking_watch[date_code]
-            if previous_count == 0 and count > 0:
-                human_date = humanize_date(date_code)
-                print(f"    -> 🎉 Booking just opened for {date_code}! ({count} {SCREEN_FILTER} sessions now listed)")
-                trigger_ntfy(
-                    f"🎬 Booking OPEN for #TheOdyssey at {VENUE_LABEL}!\n\n"
-                    f"{human_date} now has {count} {SCREEN_FILTER} session(s) listed. Go grab tickets!"
-                )
-        else:
-            print(f"    -> [BOOKING WATCH] First time observing {date_code} (count={count}). Establishing baseline, no alert.")
-        watch_deltas[date_code] = count
+    state = check_booking_opened(date_counts, state)
 
-    if watch_deltas:
-        updated_watch = dict(booking_watch)
-        updated_watch.update(watch_deltas)
-        save_state({"_booking_watch": updated_watch}, commit_msg="Update booking-watch state")
-        # Refresh in-memory state so the rest of this run sees the merged result too
-        state["_booking_watch"] = updated_watch
+    # --- Wait for booking to open ---
+    # Instead of exiting immediately when no sessions are listed yet, keep
+    # re-checking on a short interval for the rest of this run's lifetime.
+    # This decouples "how fast do we notice booking opened" from GitHub's
+    # cron scheduling jitter (which can drift 15-40+ min) - detection speed
+    # is now governed by BOOKING_WAIT_INTERVAL instead.
+    BOOKING_WAIT_INTERVAL = 45  # seconds
+    while total_sessions == 0 and (time.time() - start_time) < MAX_RUNTIME_SECONDS:
+        print(f"\n[WAIT] No sessions listed yet. Rechecking in {BOOKING_WAIT_INTERVAL}s...")
+        time.sleep(BOOKING_WAIT_INTERVAL)
+
+        target_sessions, date_counts = fetch_sessions()
+        total_sessions = len(target_sessions)
+        state = check_booking_opened(date_counts, state)
 
     if total_sessions == 0:
-        print("No sessions currently open for booking. Will keep checking on future runs. Exiting.")
+        print("\n🏁 Time limit reached (5h 55m) with no sessions ever listed. Gracefully shutting down.")
         return
 
+    print(f"\n✅ Booking is open — {total_sessions} {SCREEN_FILTER} session(s) found. Switching to seat-level monitoring.")
     cycle_count = 1
     
     while (time.time() - start_time) < MAX_RUNTIME_SECONDS:
