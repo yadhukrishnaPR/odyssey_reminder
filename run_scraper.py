@@ -11,7 +11,7 @@ from datetime import datetime
 # All of these can be overridden via environment variables (e.g. GitHub Actions
 # workflow_dispatch inputs) without touching this file. Comma-separate multiple
 # dates for DATES, e.g. "20260723,20260724".
-DATES = [d.strip() for d in os.getenv("BMS_DATES", "20260723,20260724").split(",") if d.strip()]
+DATES = [d.strip() for d in os.getenv("BMS_DATES", "20260724").split(",") if d.strip()]
 VENUE_CODE = os.getenv("BMS_VENUE_CODE", "BWCB")
 EVENT_CODE = os.getenv("BMS_EVENT_CODE", "ET00480917")
 REGION_CODE = os.getenv("BMS_REGION_CODE", "CBE")
