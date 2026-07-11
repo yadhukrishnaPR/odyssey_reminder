@@ -11,7 +11,7 @@ from datetime import datetime
 # All of these can be overridden via environment variables (e.g. GitHub Actions
 # workflow_dispatch inputs) without touching this file. Comma-separate multiple
 # dates for DATES, e.g. "20260723,20260724".
-DATES = [d.strip() for d in os.getenv("BMS_DATES", "20260724").split(",") if d.strip()]
+DATES = [d.strip() for d in os.getenv("BMS_DATES", "20260723,20260724").split(",") if d.strip()]
 VENUE_CODE = os.getenv("BMS_VENUE_CODE", "BWCB")
 EVENT_CODE = os.getenv("BMS_EVENT_CODE", "ET00480917")
 REGION_CODE = os.getenv("BMS_REGION_CODE", "CBE")
@@ -349,7 +349,7 @@ def main():
     # This decouples "how fast do we notice booking opened" from GitHub's
     # cron scheduling jitter (which can drift 15-40+ min) - detection speed
     # is now governed by BOOKING_WAIT_INTERVAL instead.
-    BOOKING_WAIT_INTERVAL = 45  # seconds
+    BOOKING_WAIT_INTERVAL = 2 * 60 * 60  # 2 hours, in seconds
     while total_sessions == 0 and (time.time() - start_time) < MAX_RUNTIME_SECONDS:
         print(f"\n[WAIT] No sessions listed yet. Rechecking in {BOOKING_WAIT_INTERVAL}s...")
         time.sleep(BOOKING_WAIT_INTERVAL)
