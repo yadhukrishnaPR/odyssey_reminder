@@ -22,7 +22,7 @@ on:
       screen_filter:
         description: 'Screen attribute label to filter on (e.g. "IMAX SCREEN", "PCX SCREEN")'
         required: false
-        default: 'MAX Laser 12.1'
+        default: 'IMAX Laser 12.1'
       venue_label:
         description: 'Human-readable venue name for the notification text'
         required: false
