@@ -6,7 +6,7 @@ on:
       dates:
         description: 'Show dates, comma-separated (YYYYMMDD)'
         required: false
-        default: '20260723,20260724'
+        default: '20260724'
       venue_code:
         description: 'BMS venue code'
         required: false
